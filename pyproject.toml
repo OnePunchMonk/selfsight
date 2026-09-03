@@ -1,0 +1,5 @@
+[project]
+name = "selfsight"
+version = "0.0.1"
+description = "Self-improving post-training and evaluation for vision-language models"
+requires-python = ">=3.10"
