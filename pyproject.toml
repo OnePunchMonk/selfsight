@@ -9,6 +9,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest"]
+training = [
+    "torch",
+    "transformers>=4.46",
+    "accelerate",
+    "peft",
+    "pyyaml",
+]
+modal = ["modal"]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,0 +1,36 @@
+# One reproducible SFT iteration: which checkpoint, which data, which
+# recipe. See training/config.py:SFTConfig for field docs.
+#
+# Qwen2-VL-2B-Instruct chosen as the default base model specifically because
+# it fits LoRA SFT on a single modest GPU (L4/A10G, ~24GB) -- no A100/H100
+# needed for this phase. Swap base_model for a larger checkpoint once the
+# loop mechanism is validated and the compute budget allows it.
+
+base_model: Qwen/Qwen2-VL-2B-Instruct
+output_dir: checkpoints/candidate-001
+
+curated_jsonl: curated.jsonl
+# Only needed if curated.jsonl predates the benchmark/split fields on
+# CuratedExample (data/filtering.py). Leave null when curated.jsonl was
+# produced by the current data/cli.py.
+benchmark_override: null
+split_override: null
+
+max_seq_length: 2048
+num_train_epochs: 1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-4
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+logging_steps: 10
+save_strategy: epoch
+bf16: true
+seed: 42
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]

@@ -35,7 +35,9 @@ def main() -> None:
     scorer = SelfConsistencyScorer()
     scored = scorer.score_all(groups)
 
-    curated = filter_rollouts(scored, min_agreement=args.min_agreement)
+    curated = filter_rollouts(
+        scored, min_agreement=args.min_agreement, benchmark=args.benchmark, split=args.split
+    )
     write_jsonl(curated, args.output)
 
     kept_prompts = sum(1 for g in scored if g.agreement >= args.min_agreement)

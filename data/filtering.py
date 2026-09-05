@@ -27,10 +27,19 @@ class CuratedExample:
     extracted: str
     agreement: float
     model_id: str
+    # Which benchmark/split this sample came from. Rollouts don't carry
+    # images (see rollouts.py), so training/dataset.py re-fetches them from
+    # the benchmark loader by (benchmark, split, sample_id) at train time.
+    # Optional/blank for callers that curate outside a benchmark context.
+    benchmark: str = ""
+    split: str = ""
 
 
 def filter_rollouts(
-    groups: list[ScoredGroup], min_agreement: float = 0.6
+    groups: list[ScoredGroup],
+    min_agreement: float = 0.6,
+    benchmark: str = "",
+    split: str = "",
 ) -> list[CuratedExample]:
     """Select training examples from scored rollout groups.
 
@@ -50,6 +59,8 @@ def filter_rollouts(
                     extracted=rollout.extracted,
                     agreement=group.agreement,
                     model_id=rollout.model_id,
+                    benchmark=benchmark,
+                    split=split,
                 )
             )
     return curated
