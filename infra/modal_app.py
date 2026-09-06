@@ -156,7 +156,7 @@ def diagnose_processor(
     return "\n".join(lines)
 
 
-@app.function(image=image, volumes={VOLUME_PATH: volume}, timeout=3600)
+@app.function(image=image, gpu=GPU_TYPE, volumes={VOLUME_PATH: volume}, timeout=3600)
 def generate_rollouts(
     model: str = "mock:demo-v1",
     benchmark: str = "demo_mc",
@@ -167,11 +167,18 @@ def generate_rollouts(
     min_agreement: float = 0.6,
     output: str = "curated.jsonl",
     scored_output: str | None = "scored.jsonl",
+    metrics_output: str | None = "metrics.jsonl",
 ) -> str:
     """Phase 1: rollout -> self-consistency score -> filter, on Modal.
 
+    On an L4 GPU so this also works for a real (`hf:...`) model, not just
+    the mock adapter -- an idle GPU alloc costs little for the fast mock
+    runs, and it's what a real rollout run actually needs.
+
     `scored_output`, when given, also dumps every rollout (not just the
     SFT-filtered majority ones) for phase 3's GRPO to consume.
+    `metrics_output` tracks mean agreement/diversity across runs and flags
+    the reward-hacking collapse signature (data/diversity.py).
     """
     import subprocess
     import sys
@@ -202,6 +209,8 @@ def generate_rollouts(
         cmd += ["--max-samples", str(max_samples)]
     if scored_output is not None:
         cmd += ["--scored-output", f"{VOLUME_PATH}/{scored_output}"]
+    if metrics_output is not None:
+        cmd += ["--metrics-output", f"{VOLUME_PATH}/{metrics_output}"]
 
     subprocess.run(cmd, cwd="/root/selfsight", check=True)
     volume.commit()
