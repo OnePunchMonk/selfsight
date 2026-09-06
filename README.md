@@ -24,7 +24,7 @@ flowchart LR
         CKPT["Current checkpoint"] -->|sample k| ROLL["Rollout generation<br/>data/rollouts.py"]
         ROLL -->|extract answers| SCORE["Self-consistency scoring<br/>data/scoring.py"]
         SCORE -->|agreement >= threshold| FILTER["Filter -> curated set<br/>data/filtering.py"]
-        FILTER -->|prompt, response pairs| SFT["LoRA SFT<br/>training/sft.py"]
+        FILTER -->|prompt, response pairs| SFT["LoRA SFT / GRPO<br/>training/sft.py, training/grpo.py"]
         SFT -->|candidate checkpoint| GATE
         GATE{{"Eval harness gate<br/>vlm-evaluation-harness<br/>paired McNemar + bootstrap CI"}}
         GATE -->|promote: passes regression test| CKPT
@@ -50,7 +50,7 @@ logging, and a frozen eval set — is tracked outside this repo for now.
 ```
 selfsight/
   data/        # rollout generation, self-consistency scoring, filtering — built
-  training/    # LoRA SFT over curated rollouts — built; RL/self-refinement (phase 3) not yet
+  training/    # LoRA SFT (training/sft.py) + GRPO (training/grpo.py) over curated rollouts — built
   eval/        # delegates to vlm-evaluation-harness (separate repo, the promotion gate)
   configs/     # per-iteration training recipes
   infra/       # Modal app for rollout generation + SFT training
@@ -63,19 +63,25 @@ pip install -e ".[dev,training]"
 pytest tests/ -q
 
 # phase 1: rollout -> self-consistency score -> filter (offline, mock adapter)
+# --scored-output also dumps every rollout (not just the SFT-filtered
+# majority ones), which phase 3's GRPO needs.
 python -m data.cli --model mock:demo-v1 --benchmark demo_mc --k 5 \
-    --min-agreement 0.6 --output curated.jsonl
+    --min-agreement 0.6 --output curated.jsonl --scored-output scored.jsonl
 
 # phase 2: LoRA SFT over the curated set
 python -m training.cli --config configs/sft_qwen2vl.yaml
+
+# phase 3: GRPO over the scored (unfiltered) rollouts
+python -m training.grpo_cli --config configs/grpo_internvl.yaml
 ```
 
-Both steps also run on [Modal](https://modal.com) (`infra/modal_app.py`),
+All three steps also run on [Modal](https://modal.com) (`infra/modal_app.py`),
 pinned to an L4 GPU — no A100/H100 for this phase's model size:
 
 ```bash
 modal run infra/modal_app.py::generate_rollouts --model mock:demo-v1 --benchmark demo_mc
 modal run infra/modal_app.py::train_sft --config configs/sft_qwen2vl.yaml
+modal run infra/modal_app.py::train_grpo --config configs/grpo_internvl.yaml
 ```
 
 ## Status
@@ -88,9 +94,12 @@ framework-level bugs in their vision-input handling under the currently
 available `transformers` versions — see
 [#1](https://github.com/OnePunchMonk/selfsight/issues/1) and
 [#2](https://github.com/OnePunchMonk/selfsight/issues/2) — so InternVL is the
-working default until those are resolved. Running phase 2's output against
-the eval-harness gate on a real (non-demo) benchmark is the next step. Phase
-3 (RL / self-refinement) is not started.
+working default until those are resolved. Phase 3 (GRPO, `training/grpo.py`)
+is built: every rollout in a self-consistency group trains on a
+group-relative advantage instead of SFT's hard majority filter, with an
+optional KL penalty against the frozen base (via LoRA's `disable_adapter`,
+no second model copy needed). Running phase 2/3 output against the
+eval-harness gate on a real (non-demo) benchmark is the next step.
 
 ## License
 

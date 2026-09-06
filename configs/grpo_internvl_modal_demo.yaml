@@ -1,0 +1,37 @@
+# Phase 3 demo config for infra/modal_app.py::train_grpo. Same smoke-test
+# intent as configs/sft_qwen2vl_modal_demo.yaml -- validates the GRPO
+# mechanism (group-relative advantage weighting over self-consistency
+# rollouts) end to end, not a meaningfully improved checkpoint.
+#
+# InternVL3-2B-hf chosen for the same reason as the phase-2 demo: it's the
+# one base model confirmed to run cleanly through this dependency stack
+# (see github.com/OnePunchMonk/selfsight/issues/1 and /2 for the other two).
+
+base_model: OpenGVLab/InternVL3-2B-hf
+output_dir: /data/checkpoints/candidate-grpo-demo
+
+scored_jsonl: /data/scored.jsonl
+benchmark_override: null
+split_override: null
+
+min_reward_std: 1.0e-4
+kl_coef: 0.0
+
+max_seq_length: 512
+num_train_epochs: 1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-5
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+logging_steps: 1
+save_strategy: epoch
+bf16: true
+seed: 42
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]

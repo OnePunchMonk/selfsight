@@ -1,0 +1,34 @@
+# One reproducible GRPO iteration: which checkpoint, which scored-rollout
+# data, which recipe. See training/config.py:GRPOConfig for field docs.
+
+base_model: OpenGVLab/InternVL3-2B-hf
+output_dir: checkpoints/candidate-grpo-001
+
+scored_jsonl: scored.jsonl
+benchmark_override: null
+split_override: null
+
+min_reward_std: 1.0e-4
+# KL penalty against the frozen base (via LoRA's disable_adapter, no second
+# model copy needed) -- 0 disables it. Turn on once the loop has spare
+# compute budget; unconstrained GRPO can drift the policy further per step.
+kl_coef: 0.0
+
+max_seq_length: 2048
+num_train_epochs: 1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 16
+learning_rate: 1.0e-5
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+logging_steps: 10
+save_strategy: epoch
+bf16: true
+seed: 42
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]

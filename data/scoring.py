@@ -9,8 +9,10 @@ than one where the samples split 2/2/1.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from dataclasses import dataclass
+from pathlib import Path
 
 from data.rollouts import Rollout, RolloutGroup
 
@@ -49,3 +51,37 @@ class SelfConsistencyScorer:
 
     def score_all(self, groups: list[RolloutGroup]) -> list[ScoredGroup]:
         return [self.score(g) for g in groups]
+
+
+def write_scored_groups_jsonl(
+    groups: list[ScoredGroup], path: str | Path, benchmark: str = "", split: str = ""
+) -> None:
+    """Dump every rollout in every group, unfiltered -- for GRPO (training/grpo.py).
+
+    Unlike data/filtering.py's write_jsonl (which keeps only the majority
+    rollouts from groups clearing an agreement threshold, for SFT),
+    group-relative advantage estimation needs *all* rollouts per prompt,
+    including the disagreeing ones -- they're the reward=0 half of the
+    contrast that gives a group a nonzero advantage signal at all.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as f:
+        for group in groups:
+            for rollout in group.rollouts:
+                f.write(
+                    json.dumps(
+                        {
+                            "sample_id": rollout.sample_id,
+                            "prompt": rollout.prompt,
+                            "response": rollout.raw,
+                            "extracted": rollout.extracted,
+                            "majority": group.majority,
+                            "agreement": group.agreement,
+                            "model_id": rollout.model_id,
+                            "benchmark": benchmark,
+                            "split": split,
+                        }
+                    )
+                    + "\n"
+                )

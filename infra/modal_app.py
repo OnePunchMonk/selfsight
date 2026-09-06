@@ -1,4 +1,5 @@
-"""Modal app for phase 1 (rollout generation) and phase 2 (LoRA SFT).
+"""Modal app for phase 1 (rollout generation), phase 2 (LoRA SFT), and
+phase 3 (GRPO).
 
 Deliberately pinned to L4 (24GB, ~$0.80/hr on Modal as of writing) -- no
 A100/H100. Qwen2-VL-2B-Instruct + LoRA + gradient accumulation fits
@@ -7,8 +8,9 @@ step you're taking when you do.
 
 Usage:
     modal run infra/modal_app.py::generate_rollouts --model mock:demo-v1 \\
-        --benchmark demo_mc --k 5 --output curated.jsonl
+        --benchmark demo_mc --k 5 --output curated.jsonl --scored-output scored.jsonl
     modal run infra/modal_app.py::train_sft --config configs/sft_qwen2vl.yaml
+    modal run infra/modal_app.py::train_grpo --config configs/grpo_internvl.yaml
 
 Both write into a persistent Modal Volume ("selfsight-data") so a curated
 set produced by one run is visible to a later training run without
@@ -62,8 +64,13 @@ def generate_rollouts(
     temperature: float = 0.9,
     min_agreement: float = 0.6,
     output: str = "curated.jsonl",
+    scored_output: str | None = None,
 ) -> str:
-    """Phase 1: rollout -> self-consistency score -> filter, on Modal."""
+    """Phase 1: rollout -> self-consistency score -> filter, on Modal.
+
+    `scored_output`, when given, also dumps every rollout (not just the
+    SFT-filtered majority ones) for phase 3's GRPO to consume.
+    """
     import subprocess
     import sys
 
@@ -91,6 +98,8 @@ def generate_rollouts(
     ]
     if max_samples is not None:
         cmd += ["--max-samples", str(max_samples)]
+    if scored_output is not None:
+        cmd += ["--scored-output", f"{VOLUME_PATH}/{scored_output}"]
 
     subprocess.run(cmd, cwd="/root/selfsight", check=True)
     volume.commit()
@@ -113,5 +122,24 @@ def train_sft(config: str = "configs/sft_qwen2vl_modal_demo.yaml") -> str:
 
     sys.argv = ["training.cli", "--config", f"/root/selfsight/{config}"]
     train_main()
+    volume.commit()
+    return "done"
+
+
+@app.function(image=image, gpu=GPU_TYPE, volumes={VOLUME_PATH: volume}, timeout=14400)
+def train_grpo(config: str = "configs/grpo_internvl_modal_demo.yaml") -> str:
+    """Phase 3: GRPO over a scored-rollouts set already sitting in the volume.
+
+    Like train_sft, the config's `scored_jsonl`/`output_dir` should point
+    under /data when running here (e.g. scored_jsonl: /data/scored.jsonl).
+    """
+    import sys
+
+    sys.path.insert(0, "/root/selfsight")
+
+    from training.grpo_cli import main as grpo_main
+
+    sys.argv = ["training.grpo_cli", "--config", f"/root/selfsight/{config}"]
+    grpo_main()
     volume.commit()
     return "done"

@@ -2,6 +2,10 @@
 
     python -m data.cli --model mock:demo-v1 --benchmark demo_mc --k 5 \\
         --min-agreement 0.6 --output curated.jsonl
+
+Pass --scored-output to also dump every rollout (not just the SFT-filtered
+majority ones) for GRPO (training/grpo.py), which needs a group's
+disagreeing rollouts too to compute a nonzero group-relative advantage.
 """
 
 from __future__ import annotations
@@ -10,7 +14,7 @@ import argparse
 
 from data.filtering import filter_rollouts, write_jsonl
 from data.rollouts import RolloutGenerator
-from data.scoring import SelfConsistencyScorer
+from data.scoring import SelfConsistencyScorer, write_scored_groups_jsonl
 
 
 def main() -> None:
@@ -23,6 +27,9 @@ def main() -> None:
     parser.add_argument("--temperature", type=float, default=0.9)
     parser.add_argument("--min-agreement", type=float, default=0.6)
     parser.add_argument("--output", default="curated.jsonl")
+    parser.add_argument(
+        "--scored-output", default=None, help="also write all scored rollouts here (for GRPO)"
+    )
     args = parser.parse_args()
 
     generator = RolloutGenerator(args.model, k=args.k, temperature=args.temperature)
@@ -45,6 +52,12 @@ def main() -> None:
         f"{len(scored)} prompts sampled, {kept_prompts} passed agreement >= "
         f"{args.min_agreement}, {len(curated)} curated examples written to {args.output}"
     )
+
+    if args.scored_output:
+        write_scored_groups_jsonl(
+            scored, args.scored_output, benchmark=args.benchmark, split=args.split
+        )
+        print(f"all scored rollouts written to {args.scored_output}")
 
 
 if __name__ == "__main__":
