@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from training.checkpoint import save_candidate_checkpoint
 from training.config import SFTConfig
 from training.dataset import SFTDataset, collate_single, load_curated_examples
 
@@ -102,19 +103,12 @@ def run_sft(config: SFTConfig) -> str:
     )
     trainer.train()
 
-    if config.lora.enabled:
-        # merge_and_unload folds the adapter into the base weights and
-        # returns a plain AutoModelForImageTextToText -- trainer.save_model
-        # would otherwise save only the adapter (adapter_config.json +
-        # a few MB of delta weights), which nothing outside peft can load
-        # standalone. The eval harness's HuggingFaceAdapter does a plain
-        # AutoModelForImageTextToText.from_pretrained(path) with no idea
-        # LoRA is involved, so the candidate has to be a complete model.
-        merged = model.merge_and_unload()
-        merged.save_pretrained(str(output_dir))
-    else:
-        trainer.save_model(str(output_dir))
-    processor.save_pretrained(str(output_dir))
+    # See training/checkpoint.py for why this isn't a plain
+    # trainer.save_model() + processor.save_pretrained(): LoRA needs
+    # merging into a standalone model (nothing outside peft can load an
+    # adapter-only save), and the processor/tokenizer get copied from the
+    # base model's original hub files rather than re-serialized, per #4.
+    save_candidate_checkpoint(model, processor, config.base_model, str(output_dir), config.lora.enabled)
 
     logger.info("candidate checkpoint written to %s -- run eval harness before promoting", output_dir)
     return str(output_dir)

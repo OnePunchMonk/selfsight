@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from training.checkpoint import save_candidate_checkpoint
 from training.config import GRPOConfig
 from training.dataset import collate_single
 from training.grpo_dataset import GRPODataset, load_scored_groups
@@ -159,14 +160,9 @@ def run_grpo(config: GRPOConfig) -> str:
 
     trainer.train()
 
-    if config.lora.enabled:
-        # See training/sft.py's run_sft for why this has to be a merged,
-        # standalone model rather than an adapter-only save.
-        merged = model.merge_and_unload()
-        merged.save_pretrained(str(output_dir))
-    else:
-        trainer.save_model(str(output_dir))
-    processor.save_pretrained(str(output_dir))
+    # See training/checkpoint.py for why this isn't a plain
+    # trainer.save_model() + processor.save_pretrained().
+    save_candidate_checkpoint(model, processor, config.base_model, str(output_dir), config.lora.enabled)
 
     logger.info("candidate checkpoint written to %s -- run eval harness before promoting", output_dir)
     return str(output_dir)
