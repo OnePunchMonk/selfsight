@@ -1,0 +1,32 @@
+# First SFT pass on *real* self-generated rollouts (not the mock adapter):
+# InternVL3-2B-hf sampled 5x per prompt on demo_mc, self-consistency-filtered
+# at min_agreement=0.6 (all 12 prompts passed at agreement=1.0 -- the model
+# is already confidently correct on this easy synthetic benchmark, so this
+# is mild self-reinforcement of existing correct behavior, not a capability
+# jump. Still the first real (non-mock) link in the loop.
+
+base_model: OpenGVLab/InternVL3-2B-hf
+output_dir: /data/checkpoints/candidate-real-sft
+
+curated_jsonl: /data/curated_real.jsonl
+benchmark_override: null
+split_override: null
+
+max_seq_length: 512
+num_train_epochs: 1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-5
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+logging_steps: 5
+save_strategy: epoch
+bf16: true
+seed: 42
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
