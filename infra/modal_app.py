@@ -60,7 +60,7 @@ image = (
 
 
 @app.function(image=image, volumes={VOLUME_PATH: volume}, timeout=60)
-def cat_file(path: str = "/data/checkpoints/candidate-demo/tokenizer_config.json") -> str:
+def cat_file(path: str = "/data/.vlm-evaluation-harness/history.jsonl") -> str:
     """Debug helper: print a small file from the volume. CPU-only, no GPU."""
     with open(path) as f:
         content = f.read()
@@ -300,7 +300,7 @@ def eval_model(
 def check_regression(
     baseline: str = "hf:OpenGVLab/InternVL3-2B-hf",
     current: str = "hf:/data/checkpoints/candidate-demo",
-    bench: str = "spatial_count",
+    bench: str = "SpatialCount",
     threshold: float = 0.03,
 ) -> str:
     """The promotion gate: paired-significance regression check between two
