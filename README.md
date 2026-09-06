@@ -98,8 +98,17 @@ working default until those are resolved. Phase 3 (GRPO, `training/grpo.py`)
 is built: every rollout in a self-consistency group trains on a
 group-relative advantage instead of SFT's hard majority filter, with an
 optional KL penalty against the frozen base (via LoRA's `disable_adapter`,
-no second model copy needed). Running phase 2/3 output against the
-eval-harness gate on a real (non-demo) benchmark is the next step.
+no second model copy needed). A real (non-mock) benchmark baseline is
+established -- `InternVL3-2B-hf` scores 87.5% on `spatial_count` -- and
+`training/sft.py`/`training/grpo.py` now merge LoRA into a standalone
+checkpoint (needed for the eval harness to load it at all). Evaluating that
+merged checkpoint hits a fourth framework-level bug, this time in
+`transformers`' InternVL image-token accounting for locally-saved
+checkpoints specifically (hub-loaded works, local-directory-loaded doesn't,
+despite byte-identical configs) -- see
+[#4](https://github.com/OnePunchMonk/selfsight/issues/4). Closing the loop
+against the eval-harness gate is blocked on that until it's fixed upstream
+or worked around.
 
 ## License
 

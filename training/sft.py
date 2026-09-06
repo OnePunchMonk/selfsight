@@ -101,7 +101,19 @@ def run_sft(config: SFTConfig) -> str:
         data_collator=collate_single,
     )
     trainer.train()
-    trainer.save_model(str(output_dir))
+
+    if config.lora.enabled:
+        # merge_and_unload folds the adapter into the base weights and
+        # returns a plain AutoModelForImageTextToText -- trainer.save_model
+        # would otherwise save only the adapter (adapter_config.json +
+        # a few MB of delta weights), which nothing outside peft can load
+        # standalone. The eval harness's HuggingFaceAdapter does a plain
+        # AutoModelForImageTextToText.from_pretrained(path) with no idea
+        # LoRA is involved, so the candidate has to be a complete model.
+        merged = model.merge_and_unload()
+        merged.save_pretrained(str(output_dir))
+    else:
+        trainer.save_model(str(output_dir))
     processor.save_pretrained(str(output_dir))
 
     logger.info("candidate checkpoint written to %s -- run eval harness before promoting", output_dir)

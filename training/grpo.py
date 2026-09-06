@@ -158,7 +158,14 @@ def run_grpo(config: GRPOConfig) -> str:
     )
 
     trainer.train()
-    trainer.save_model(str(output_dir))
+
+    if config.lora.enabled:
+        # See training/sft.py's run_sft for why this has to be a merged,
+        # standalone model rather than an adapter-only save.
+        merged = model.merge_and_unload()
+        merged.save_pretrained(str(output_dir))
+    else:
+        trainer.save_model(str(output_dir))
     processor.save_pretrained(str(output_dir))
 
     logger.info("candidate checkpoint written to %s -- run eval harness before promoting", output_dir)
