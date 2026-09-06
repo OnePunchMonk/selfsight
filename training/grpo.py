@@ -146,10 +146,16 @@ def run_grpo(config: GRPOConfig) -> str:
         train_dataset=dataset,
         data_collator=collate_single,
     )
-    # Bind as an instance method so `self` inside compute_loss is the Trainer
-    # (needed for its internal bookkeeping) while the loss math itself lives
-    # in GRPOTrainer, independent of transformers.Trainer's constructor.
-    trainer.compute_loss = grpo.compute_loss.__get__(trainer, Trainer)
+    # A closure, not a bound-method assignment: transformers.Trainer.train()
+    # calls `self.compute_loss(...)`, which looks up the *instance*
+    # attribute below rather than the class method -- binding it to `trainer`
+    # via __get__ would make `self` inside GRPOTrainer.compute_loss the
+    # Trainer instance, not the GRPOTrainer holding kl_coef.
+    trainer.compute_loss = (
+        lambda model, inputs, return_outputs=False, num_items_in_batch=None: grpo.compute_loss(
+            model, inputs, return_outputs, num_items_in_batch
+        )
+    )
 
     trainer.train()
     trainer.save_model(str(output_dir))

@@ -64,7 +64,7 @@ def generate_rollouts(
     temperature: float = 0.9,
     min_agreement: float = 0.6,
     output: str = "curated.jsonl",
-    scored_output: str | None = None,
+    scored_output: str | None = "scored.jsonl",
 ) -> str:
     """Phase 1: rollout -> self-consistency score -> filter, on Modal.
 
