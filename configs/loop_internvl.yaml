@@ -1,0 +1,30 @@
+# Phase 4: bounds one automated loop iteration. Each `python -m
+# training.loop_cli --config configs/loop_internvl.yaml` call advances by
+# exactly one iteration and persists state -- it is not a daemon.
+#
+# train_benchmark and eval_benchmark must stay different manifests (the RSI
+# scope's frozen-eval-set rule): demo_mc is what the model trains on,
+# SpatialCount is the held-out benchmark that decides promotion.
+
+current_model: OpenGVLab/InternVL3-2B-hf
+train_benchmark: demo_mc
+eval_benchmark: SpatialCount
+split: validation
+
+k: 5
+temperature: 0.9
+min_agreement: 0.6
+
+training_mode: sft
+training_config_path: configs/sft_internvl_real_demo.yaml
+
+work_dir: loop_work
+state_path: loop_state.json
+metrics_path: loop_metrics.jsonl
+
+# RSI hard cap: no unattended run past this many iterations without a
+# human reviewing the eval trajectory, sample rollouts, and diversity
+# metrics (training/loop_cli.py --override-cap after that review).
+iteration_cap: 5
+regression_threshold: 0.03
+min_reward_std: 1.0e-4
