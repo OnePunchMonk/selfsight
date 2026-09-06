@@ -10,11 +10,27 @@ than one where the samples split 2/2/1.
 from __future__ import annotations
 
 import json
+import math
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 from data.rollouts import Rollout, RolloutGroup
+
+
+def _normalized_entropy(votes: Counter, n: int) -> float:
+    """Shannon entropy of the vote distribution, normalized to [0, 1] by
+    log2(n) so it's comparable across groups sampled at different k.
+
+    0.0 = unanimous (every rollout picked the same answer). 1.0 = maximally
+    diverse (all n rollouts picked distinct answers). This is the "is the
+    model actually diverse or just confidently repeating itself" signal --
+    see RSI scope note in the artifact on reward-hacking/collapse detection.
+    """
+    if n <= 1:
+        return 0.0
+    h = -sum((c / n) * math.log2(c / n) for c in votes.values())
+    return h / math.log2(n)
 
 
 @dataclass
@@ -26,6 +42,7 @@ class ScoredGroup:
     majority: str  # the extracted answer with the most votes
     agreement: float  # majority_votes / n, in [0, 1]
     rollouts: list[Rollout]
+    entropy: float = 0.0  # normalized Shannon entropy of the vote distribution, in [0, 1]
 
     def majority_rollouts(self) -> list[Rollout]:
         """The rollouts whose extracted answer matches the majority vote."""
@@ -40,13 +57,15 @@ class SelfConsistencyScorer:
             raise ValueError(f"rollout group {group.sample_id!r} has no rollouts to score")
         votes = Counter(r.extracted for r in group.rollouts)
         majority, count = votes.most_common(1)[0]
-        agreement = count / len(group.rollouts)
+        n = len(group.rollouts)
+        agreement = count / n
         return ScoredGroup(
             sample_id=group.sample_id,
             prompt=group.prompt,
             majority=majority,
             agreement=agreement,
             rollouts=group.rollouts,
+            entropy=_normalized_entropy(votes, n),
         )
 
     def score_all(self, groups: list[RolloutGroup]) -> list[ScoredGroup]:
@@ -78,6 +97,7 @@ def write_scored_groups_jsonl(
                             "extracted": rollout.extracted,
                             "majority": group.majority,
                             "agreement": group.agreement,
+                            "entropy": group.entropy,
                             "model_id": rollout.model_id,
                             "benchmark": benchmark,
                             "split": split,

@@ -18,6 +18,7 @@ def test_unanimous_group_has_agreement_one():
     scored = SelfConsistencyScorer().score(group)
     assert scored.majority == "A"
     assert scored.agreement == 1.0
+    assert scored.entropy == 0.0
     assert len(scored.majority_rollouts()) == 5
 
 
@@ -27,7 +28,15 @@ def test_split_vote_picks_the_larger_side():
     scored = SelfConsistencyScorer().score(group)
     assert scored.majority == "A"
     assert scored.agreement == 3 / 5
+    assert 0.0 < scored.entropy < 1.0
     assert [r.draw for r in scored.majority_rollouts()] == [0, 1, 2]
+
+
+def test_maximally_diverse_group_has_entropy_one():
+    rollouts = [_rollout(i, letter) for i, letter in enumerate("ABCDE")]
+    group = RolloutGroup(sample_id="s0", prompt="p", rollouts=rollouts)
+    scored = SelfConsistencyScorer().score(group)
+    assert scored.entropy == 1.0
 
 
 def test_empty_group_raises():
