@@ -112,3 +112,41 @@ def test_grpo_trainer_loss_sign_matches_advantage():
     inputs = {"labels": torch.tensor([1, 2, 3]), "advantage": torch.tensor([-2.0])}
     loss = grpo.compute_loss(_FakeModel(0.5), dict(inputs))
     assert loss.item() == -1.0
+
+
+def test_grpo_trainer_survives_the_actual_trainer_assignment_pattern():
+    """Regression test for the self-binding bug found in Modal validation
+    (github.com/OnePunchMonk/selfsight/issues/3): `run_sft` doesn't call
+    GRPOTrainer.compute_loss directly, it assigns a closure over it as a
+    `transformers.Trainer` *instance* attribute (see training/grpo.py's
+    `run_grpo`), because that's the shape `Trainer.train()` actually calls
+    through. Binding via `grpo.compute_loss.__get__(trainer, Trainer)`
+    silently made `self` inside the method the Trainer, not the GRPOTrainer,
+    so `self.kl_coef` raised AttributeError on the first real training step
+    -- a failure mode the tests above never exercised, since they call the
+    method directly on a real GRPOTrainer instance.
+    """
+
+    class _FakeOutputs:
+        def __init__(self, loss):
+            self.loss = loss
+
+    class _FakeModel:
+        def __call__(self, **kwargs):
+            return _FakeOutputs(torch.tensor(0.5))
+
+    class _FakeTrainer:
+        pass
+
+    grpo = GRPOTrainer(kl_coef=0.0)
+    trainer = _FakeTrainer()
+    # The exact assignment pattern training/grpo.py:run_grpo uses.
+    trainer.compute_loss = (
+        lambda model, inputs, return_outputs=False, num_items_in_batch=None: grpo.compute_loss(
+            model, inputs, return_outputs, num_items_in_batch
+        )
+    )
+
+    inputs = {"labels": torch.tensor([1, 2, 3]), "advantage": torch.tensor([2.0])}
+    loss = trainer.compute_loss(_FakeModel(), inputs, num_items_in_batch=3)
+    assert loss.item() == 1.0
