@@ -47,6 +47,19 @@ def run_sft(config: SFTConfig) -> str:
         trust_remote_code=True,
     )
 
+    # Pre-4.47 LLaVA-NeXT processors don't know how many image tokens each
+    # image expands to (anyres tiling makes that patch_size/vision-strategy
+    # dependent) unless told explicitly -- otherwise the processor emits one
+    # <image> placeholder per image while the model expects one per patch,
+    # and the merge step in modeling_llava_next.py raises a token-count
+    # mismatch. Harmless no-op for models that already carry these.
+    vision_config = getattr(model.config, "vision_config", None)
+    if getattr(processor, "patch_size", None) is None and vision_config is not None:
+        processor.patch_size = vision_config.patch_size
+        processor.vision_feature_select_strategy = getattr(
+            model.config, "vision_feature_select_strategy", "default"
+        )
+
     if config.lora.enabled:
         from peft import LoraConfig, get_peft_model
 

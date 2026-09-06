@@ -15,6 +15,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+# Qwen2-VL's vision tower requires each image's pixel grid to divide evenly
+# by patch_size * merge_size (28 for the 2B checkpoint); tiny images (e.g.
+# the 64x64 demo_mc fixture squares) don't satisfy that and crash deep
+# inside attention with a split_with_sizes mismatch. Upscaling to a safe
+# multiple of 28 before tokenizing sidesteps it.
+_MIN_IMAGE_SIDE = 336
+
+
+def _ensure_min_size(image):
+    width, height = image.size
+    if width >= _MIN_IMAGE_SIDE and height >= _MIN_IMAGE_SIDE:
+        return image
+    scale = max(_MIN_IMAGE_SIDE / width, _MIN_IMAGE_SIDE / height)
+    return image.resize((round(width * scale), round(height * scale)))
+
 
 @dataclass
 class SFTExample:
@@ -101,6 +116,7 @@ class SFTDataset:
 
     def __getitem__(self, idx: int) -> dict:
         ex = self.examples[idx]
+        images = [_ensure_min_size(img) for img in ex.images]
         prompt_messages = [
             {
                 "role": "user",
@@ -113,10 +129,10 @@ class SFTDataset:
         )
         full_text = prompt_text + ex.response
 
-        prompt_ids = self.processor(text=prompt_text, images=ex.images or None, return_tensors="pt")
+        prompt_ids = self.processor(text=prompt_text, images=images or None, return_tensors="pt")
         full = self.processor(
             text=full_text,
-            images=ex.images or None,
+            images=images or None,
             return_tensors="pt",
             truncation=True,
             max_length=self.max_length,

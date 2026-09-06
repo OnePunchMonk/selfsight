@@ -17,9 +17,12 @@ re-downloading it.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import modal
 
 GPU_TYPE = "L4"  # explicitly not A100/H100 -- keep this modest.
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 app = modal.App("selfsight")
 
@@ -28,9 +31,11 @@ VOLUME_PATH = "/data"
 
 image = (
     modal.Image.debian_slim(python_version="3.11")
+    .apt_install("git")
     .pip_install(
         "torch",
-        "transformers>=4.46",
+        "torchvision",
+        "transformers>=4.55,<5",
         "accelerate",
         "peft",
         "datasets",
@@ -38,7 +43,12 @@ image = (
         "pyyaml",
         "vlm-evaluation-harness @ git+https://github.com/OnePunchMonk/vlm-evaluation-harness",
     )
-    .add_local_dir(".", remote_path="/root/selfsight", copy=True)
+    .add_local_dir(
+        str(REPO_ROOT),
+        remote_path="/root/selfsight",
+        copy=True,
+        ignore=["**/.venv/**", "**/.git/**", "**/__pycache__/**", "**/*.egg-info/**"],
+    )
 )
 
 
@@ -88,7 +98,7 @@ def generate_rollouts(
 
 
 @app.function(image=image, gpu=GPU_TYPE, volumes={VOLUME_PATH: volume}, timeout=14400)
-def train_sft(config: str = "configs/sft_qwen2vl.yaml") -> str:
+def train_sft(config: str = "configs/sft_qwen2vl_modal_demo.yaml") -> str:
     """Phase 2: LoRA SFT over a curated set already sitting in the volume.
 
     The config's `curated_jsonl` and `output_dir` are resolved relative to

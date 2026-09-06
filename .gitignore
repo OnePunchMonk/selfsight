@@ -8,3 +8,4 @@ venv/
 wandb/
 outputs/
 checkpoints/
+uv.lock

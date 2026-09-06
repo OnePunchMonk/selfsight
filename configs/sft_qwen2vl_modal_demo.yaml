@@ -1,0 +1,40 @@
+# Demo config for infra/modal_app.py::train_sft, exercising the full phase-2
+# mechanism (LoRA SFT over a curated set on a real GPU) end to end on the
+# mock-adapter curated set from generate_rollouts. Not meant to produce a
+# meaningfully improved checkpoint -- 24 examples from the mock adapter is a
+# pipeline smoke test, not real training data. Swap curated_jsonl for a real
+# rollout run's output once the base model / benchmark subset are chosen.
+#
+# Qwen2-VL-2B-Instruct hits a live vision-attention shape-mismatch bug in
+# this dependency stack -- see github.com/OnePunchMonk/selfsight/issues/1.
+# LLaVA-1.6-Mistral-7B (LLaVA-NeXT) hits a separate image-token-count bug --
+# see github.com/OnePunchMonk/selfsight/issues/2. InternVL3-2B-hf is the
+# HF-native port (InternVLForConditionalGeneration + standard AutoProcessor,
+# not the bespoke trust_remote_code InternVLChatModel in the non-"-hf" repo)
+# and is the demo/smoke-test model until one of the above is resolved.
+
+base_model: OpenGVLab/InternVL3-2B-hf
+output_dir: /data/checkpoints/candidate-demo
+
+curated_jsonl: /data/curated.jsonl
+benchmark_override: null
+split_override: null
+
+max_seq_length: 512
+num_train_epochs: 1
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 4
+learning_rate: 1.0e-4
+warmup_ratio: 0.03
+lr_scheduler_type: cosine
+logging_steps: 1
+save_strategy: epoch
+bf16: true
+seed: 42
+
+lora:
+  enabled: true
+  r: 16
+  alpha: 32
+  dropout: 0.05
+  target_modules: [q_proj, k_proj, v_proj, o_proj]
