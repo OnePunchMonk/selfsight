@@ -63,6 +63,14 @@ class LoopConfig:
     regression_threshold: float = 0.03
     min_reward_std: float = 1e-4  # only used when training_mode == "grpo"
 
+    def __post_init__(self) -> None:
+        if self.train_benchmark == self.eval_benchmark:
+            raise ValueError(
+                f"train_benchmark and eval_benchmark must be different manifests, both are "
+                f"{self.train_benchmark!r} -- training on the same data used for the "
+                "promotion gate invalidates the eval boundary"
+            )
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> LoopConfig:
         import yaml
@@ -117,8 +125,12 @@ def save_state(state: LoopState, path: str | Path) -> None:
 
 # (n_curated_examples, mean_agreement, mean_entropy, candidate_model_path)
 GenerateAndTrainFn = Callable[["LoopConfig", "LoopState", int], tuple[int, float, float, str]]
-# True if the candidate should be promoted (no flagged regression).
-EvaluateAndGateFn = Callable[["LoopConfig", str], bool]
+# (config, baseline_model, candidate_model) -> True if the candidate should be
+# promoted (no flagged regression). The baseline is the *currently active*
+# checkpoint (state.current_model at the start of the iteration), not
+# necessarily config.current_model -- that field is only the loop's original
+# starting point and goes stale after the first promotion.
+EvaluateAndGateFn = Callable[["LoopConfig", str, str], bool]
 
 
 def run_iteration(
@@ -143,6 +155,8 @@ def run_iteration(
             "metrics before continuing (pass override_cap=True to proceed)"
         )
 
+    baseline_model = state.current_model
+
     n_examples, mean_agreement, mean_entropy, candidate_model = generate_and_train_fn(
         config, state, state.iteration
     )
@@ -163,7 +177,7 @@ def run_iteration(
             "set anyway, after reviewing it)"
         )
 
-    promoted = evaluate_and_gate_fn(config, candidate_model)
+    promoted = evaluate_and_gate_fn(config, baseline_model, candidate_model)
 
     record = IterationRecord(
         iteration=state.iteration,
@@ -245,17 +259,19 @@ def default_generate_and_train(
     return len(curated), run_metrics.mean_agreement, run_metrics.mean_entropy, output_dir
 
 
-def default_evaluate_and_gate(config: LoopConfig, candidate_model: str) -> bool:
+def default_evaluate_and_gate(config: LoopConfig, baseline_model: str, candidate_model: str) -> bool:
     """The real (GPU-requiring) implementation of the promotion check:
     tracks a real eval run for the candidate, then diffs it against the
-    current model's latest tracked run on the same eval_benchmark via
-    vlm-evaluation-harness's own paired-significance regression check.
+    *currently active* checkpoint's (baseline_model, i.e. state.current_model
+    at the start of this iteration) latest tracked run on the same
+    eval_benchmark via vlm-evaluation-harness's own paired-significance
+    regression check.
     """
     from vlm_evaluation_harness.adapters.registry import get_adapter
     from vlm_evaluation_harness.engine.runner import EvalConfig, EvalRunner
     from vlm_evaluation_harness.tracking import HistoryStore, compare_models
 
-    baseline_spec = f"hf:{config.current_model}" if ":" not in config.current_model else config.current_model
+    baseline_spec = f"hf:{baseline_model}" if ":" not in baseline_model else baseline_model
     candidate_spec = f"hf:{candidate_model}"
 
     history = HistoryStore()

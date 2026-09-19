@@ -48,7 +48,7 @@ def test_promoted_candidate_becomes_current_model(tmp_path):
     state = LoopState(current_model=config.current_model)
 
     state = run_iteration(
-        config, state, _stub_generate_and_train(model="candidate-0"), lambda c, m: True
+        config, state, _stub_generate_and_train(model="candidate-0"), lambda c, b, m: True
     )
 
     assert state.current_model == "candidate-0"
@@ -61,7 +61,7 @@ def test_rejected_candidate_keeps_current_model(tmp_path):
     state = LoopState(current_model=config.current_model)
 
     state = run_iteration(
-        config, state, _stub_generate_and_train(model="candidate-0"), lambda c, m: False
+        config, state, _stub_generate_and_train(model="candidate-0"), lambda c, b, m: False
     )
 
     assert state.current_model == config.current_model
@@ -73,7 +73,7 @@ def test_rejected_candidate_keeps_current_model(tmp_path):
 def test_state_persists_across_calls(tmp_path):
     config = _config(tmp_path)
     state = load_state(config.state_path, default_model=config.current_model)
-    state = run_iteration(config, state, _stub_generate_and_train(), lambda c, m: True)
+    state = run_iteration(config, state, _stub_generate_and_train(), lambda c, b, m: True)
 
     reloaded = load_state(config.state_path, default_model="should-not-be-used")
     assert reloaded.current_model == state.current_model
@@ -86,7 +86,7 @@ def test_cap_reached_raises_without_override(tmp_path):
     state = LoopState(current_model=config.current_model, iteration=1)
 
     try:
-        run_iteration(config, state, _stub_generate_and_train(), lambda c, m: True)
+        run_iteration(config, state, _stub_generate_and_train(), lambda c, b, m: True)
         assert False, "expected CapReachedError"
     except CapReachedError:
         pass
@@ -97,7 +97,7 @@ def test_cap_reached_proceeds_with_override(tmp_path):
     state = LoopState(current_model=config.current_model, iteration=1)
 
     state = run_iteration(
-        config, state, _stub_generate_and_train(), lambda c, m: True, override_cap=True
+        config, state, _stub_generate_and_train(), lambda c, b, m: True, override_cap=True
     )
     assert state.iteration == 2
 
@@ -115,7 +115,7 @@ def test_collapse_detected_raises_without_override(tmp_path):
     generate_and_train = _stub_generate_and_train(agreement=0.95, entropy=0.1)
 
     try:
-        run_iteration(config, state, generate_and_train, lambda c, m: True)
+        run_iteration(config, state, generate_and_train, lambda c, b, m: True)
         assert False, "expected CollapseDetectedError"
     except CollapseDetectedError:
         pass
@@ -132,7 +132,7 @@ def test_collapse_detected_proceeds_with_override(tmp_path):
 
     generate_and_train = _stub_generate_and_train(agreement=0.95, entropy=0.1)
     state = run_iteration(
-        config, state, generate_and_train, lambda c, m: True, override_collapse=True
+        config, state, generate_and_train, lambda c, b, m: True, override_collapse=True
     )
     assert state.iteration == 1
 
@@ -144,5 +144,35 @@ def test_no_collapse_when_both_agreement_and_diversity_improve(tmp_path):
     append_run_metrics(prior, config.metrics_path)
 
     generate_and_train = _stub_generate_and_train(agreement=0.7, entropy=0.5)
-    state = run_iteration(config, state, generate_and_train, lambda c, m: True)
+    state = run_iteration(config, state, generate_and_train, lambda c, b, m: True)
     assert state.iteration == 1
+
+
+def test_gate_baseline_is_currently_promoted_model_not_original_config_model(tmp_path):
+    """Iteration 0 promotes B from A. Iteration 1 must then gate C against B
+    (the currently active checkpoint), not against A (config.current_model,
+    which goes stale after the first promotion)."""
+    config = _config(tmp_path)
+    state = LoopState(current_model=config.current_model)  # "org/base-model" == A
+
+    seen_baselines = []
+
+    def gate(cfg, baseline_model, candidate_model):
+        seen_baselines.append(baseline_model)
+        return True
+
+    state = run_iteration(config, state, _stub_generate_and_train(model="B"), gate)
+    assert state.current_model == "B"
+
+    state = run_iteration(config, state, _stub_generate_and_train(model="C"), gate)
+    assert state.current_model == "C"
+
+    assert seen_baselines == ["org/base-model", "B"]
+
+
+def test_config_rejects_identical_train_and_eval_benchmark(tmp_path):
+    try:
+        _config(tmp_path, eval_benchmark="demo_mc")  # same as train_benchmark
+        assert False, "expected ValueError"
+    except ValueError:
+        pass
