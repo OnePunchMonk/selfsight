@@ -176,3 +176,53 @@ def test_config_rejects_identical_train_and_eval_benchmark(tmp_path):
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_collapse_uses_history_before_generator_appends_current_run(tmp_path):
+    import pytest
+
+    config = _config(tmp_path)
+    state = LoopState(current_model=config.current_model)
+    append_run_metrics(summarize([_group(0.5, 0.8)], state.current_model,
+                                 config.train_benchmark), config.metrics_path)
+
+    def generate(cfg, state, iteration):
+        append_run_metrics(summarize([_group(0.95, 0.1)], state.current_model,
+                                     cfg.train_benchmark), cfg.metrics_path)
+        return 10, 0.95, 0.1, "candidate"
+
+    with pytest.raises(CollapseDetectedError):
+        run_iteration(config, state, generate, lambda *args: True)
+    assert state.iteration == 0
+
+
+def test_default_path_checks_collapse_before_training(tmp_path, monkeypatch):
+    import pytest
+    import data.rollouts
+    import training.sft
+    from training.loop import default_generate_and_train
+
+    config = _config(tmp_path)
+    state = LoopState(current_model=config.current_model)
+    append_run_metrics(summarize([_group(0.5, 0.8)], state.current_model,
+                                 config.train_benchmark), config.metrics_path)
+    from data.rollouts import RolloutGroup
+    group = RolloutGroup(sample_id="s0", prompt="p", rollouts=[
+        Rollout(sample_id="s0", draw=i, prompt="p", raw="A", extracted="A", model_id="m")
+        for i in range(5)
+    ])
+    specs = []
+    monkeypatch.setattr(data.rollouts.RolloutGenerator, "__init__",
+                        lambda self, model_spec, **kw: specs.append(model_spec))
+    monkeypatch.setattr(data.rollouts.RolloutGenerator, "generate_for_benchmark", lambda *a, **kw: iter([group]))
+    trained = []
+    monkeypatch.setattr(training.sft, "run_sft", lambda cfg: trained.append(cfg))
+    with pytest.raises(CollapseDetectedError):
+        run_iteration(config, state, default_generate_and_train, lambda *args: True)
+    assert trained == []
+    assert specs == ["hf:org/base-model"]
+    assert state.iteration == 0
+    run_iteration(config, state, default_generate_and_train, lambda *args: True,
+                  override_collapse=True)
+    assert len(trained) == 1
+    assert state.iteration == 1

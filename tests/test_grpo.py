@@ -150,3 +150,34 @@ def test_grpo_trainer_survives_the_actual_trainer_assignment_pattern():
     inputs = {"labels": torch.tensor([1, 2, 3]), "advantage": torch.tensor([2.0])}
     loss = trainer.compute_loss(_FakeModel(), inputs, num_items_in_batch=3)
     assert loss.item() == 1.0
+
+
+def test_grpo_dataset_matches_sft_tokenization():
+    from training.dataset import SFTDataset, SFTExample
+
+    processor = _FakeProcessor()
+    sft = SFTDataset([SFTExample("hello", " world", [])], processor)[0]
+    grpo = GRPODataset([GRPOExample("hello", " world", [], -1.25)], processor)[0]
+    assert set(grpo) == set(sft) | {"advantage"}
+    for key in sft:
+        assert torch.equal(sft[key], grpo[key])
+    assert grpo["advantage"].item() == -1.25
+
+
+def test_scored_groups_do_not_mix_sample_ids_across_sources(tmp_path, monkeypatch):
+    import training.grpo_dataset as module
+
+    monkeypatch.setattr(module, "_index_images", lambda bench, split, ids: {s: [] for s in ids})
+    rows = [
+        {"sample_id": "same", "prompt": "p", "response": answer,
+         "extracted": answer, "majority": majority, "benchmark": benchmark, "split": split}
+        for benchmark, split, majority, answers in [
+            ("first", "validation", "A", ["A", "A"]),
+            ("second", "validation", "B", ["B", "C"]),
+            ("second", "test", "B", ["B", "B"]),
+        ]
+        for answer in answers
+    ]
+    examples = load_scored_groups(_write_scored(tmp_path, rows))
+    assert [ex.response for ex in examples] == ["B", "C"]
+    assert [ex.advantage for ex in examples] == [1.0, -1.0]

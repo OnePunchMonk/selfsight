@@ -156,10 +156,15 @@ def run_iteration(
         )
 
     baseline_model = state.current_model
+    prior_runs = load_run_history(config.metrics_path, model=baseline_model, benchmark=config.train_benchmark)
 
-    n_examples, mean_agreement, mean_entropy, candidate_model = generate_and_train_fn(
-        config, state, state.iteration
-    )
+    # Keep existing three-argument callbacks compatible. The built-in path
+    # can enforce the check before training as well as before promotion.
+    if generate_and_train_fn is default_generate_and_train:
+        result = generate_and_train_fn(config, state, state.iteration, override_collapse=override_collapse)
+    else:
+        result = generate_and_train_fn(config, state, state.iteration)
+    n_examples, mean_agreement, mean_entropy, candidate_model = result
 
     current_run = RunMetrics(
         timestamp=datetime.now(timezone.utc).isoformat(),
@@ -169,7 +174,6 @@ def run_iteration(
         mean_agreement=mean_agreement,
         mean_entropy=mean_entropy,
     )
-    prior_runs = load_run_history(config.metrics_path, model=state.current_model, benchmark=config.train_benchmark)
     collapse: CollapseWarning | None = detect_collapse(current_run, prior_runs)
     if collapse and not override_collapse:
         raise CollapseDetectedError(
@@ -201,7 +205,7 @@ def run_iteration(
 
 
 def default_generate_and_train(
-    config: LoopConfig, state: LoopState, iteration: int
+    config: LoopConfig, state: LoopState, iteration: int, *, override_collapse: bool = False
 ) -> tuple[int, float, float, str]:
     """The real (GPU-requiring) implementation of one iteration's rollout
     generation + self-consistency scoring/filtering + training. Not covered
@@ -217,7 +221,8 @@ def default_generate_and_train(
     curated_path = work_dir / f"curated-{iteration}.jsonl"
     scored_path = work_dir / f"scored-{iteration}.jsonl"
 
-    generator = RolloutGenerator(state.current_model, k=config.k, temperature=config.temperature)
+    model_spec = state.current_model if ":" in state.current_model else f"hf:{state.current_model}"
+    generator = RolloutGenerator(model_spec, k=config.k, temperature=config.temperature)
     groups = list(generator.generate_for_benchmark(config.train_benchmark, split=config.split))
     scored = SelfConsistencyScorer().score_all(groups)
 
@@ -233,6 +238,10 @@ def default_generate_and_train(
     run_metrics = summarize(scored, model=state.current_model, benchmark=config.train_benchmark)
     from data.diversity import append_run_metrics
 
+    prior_runs = load_run_history(config.metrics_path, model=state.current_model, benchmark=config.train_benchmark)
+    collapse = detect_collapse(run_metrics, prior_runs)
+    if collapse and not override_collapse:
+        raise CollapseDetectedError(collapse.summary())
     append_run_metrics(run_metrics, config.metrics_path)
 
     output_dir = str(work_dir / f"candidate-{iteration}")

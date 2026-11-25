@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from training.dataset import _ensure_min_size, _index_images
+from training.dataset import SFTDataset, _index_images
 
 
 @dataclass
@@ -53,7 +53,7 @@ def load_scored_groups(
     min_reward_std: float = 1e-4,
 ) -> list[GRPOExample]:
     """Load a scored.jsonl (data/scoring.py:write_scored_groups_jsonl),
-    compute per-rollout advantages within each (sample_id) group, and
+    compute per-rollout advantages within each (benchmark, split, sample_id) group, and
     attach images. Groups whose reward std falls below `min_reward_std`
     (every rollout agreed, or none did) are dropped -- zero advantage
     either way, so skipping them saves a wasted forward pass.
@@ -67,13 +67,18 @@ def load_scored_groups(
     if not rows:
         return []
 
-    by_sample: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    by_sample: dict[tuple[str | None, str | None, str], list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
-        by_sample[row["sample_id"]].append(row)
+        key = (
+            row.get("benchmark") or benchmark_override,
+            row.get("split") or split_override,
+            row["sample_id"],
+        )
+        by_sample[key].append(row)
 
     kept_rows: list[dict[str, Any]] = []
     advantages: list[float] = []
-    for sample_id, group_rows in by_sample.items():
+    for group_rows in by_sample.values():
         rewards = [1.0 if r["extracted"] == r["majority"] else 0.0 for r in group_rows]
         if statistics.pstdev(rewards) < min_reward_std:
             continue
@@ -110,53 +115,12 @@ def load_scored_groups(
     return examples  # type: ignore[return-value]
 
 
-class GRPODataset:
-    """Tokenizes GRPOExamples the same way SFTDataset does (prompt span
-    masked to -100 in `labels`) but also carries each example's scalar
-    `advantage`, which GRPOTrainer.compute_loss multiplies the response
-    tokens' log-probability by.
-    """
-
-    def __init__(self, examples: list[GRPOExample], processor, max_length: int = 2048):
-        self.examples = examples
-        self.processor = processor
-        self.max_length = max_length
-
-    def __len__(self) -> int:
-        return len(self.examples)
+class GRPODataset(SFTDataset):
+    """Use SFT tokenization and attach the rollout's group-relative advantage."""
 
     def __getitem__(self, idx: int) -> dict:
         import torch
 
-        ex = self.examples[idx]
-        images = [_ensure_min_size(img) for img in ex.images]
-        prompt_messages = [
-            {
-                "role": "user",
-                "content": [{"type": "image"} for _ in ex.images]
-                + [{"type": "text", "text": ex.prompt}],
-            }
-        ]
-        prompt_text = self.processor.apply_chat_template(
-            prompt_messages, tokenize=False, add_generation_prompt=True
-        )
-        full_text = prompt_text + ex.response
-
-        prompt_ids = self.processor(text=prompt_text, images=images or None, return_tensors="pt")
-        full = self.processor(
-            text=full_text,
-            images=images or None,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self.max_length,
-        )
-
-        input_ids = full["input_ids"][0]
-        labels = input_ids.clone()
-        prompt_len = min(prompt_ids["input_ids"].shape[-1], labels.shape[0])
-        labels[:prompt_len] = -100
-
-        item = {k: v[0] for k, v in full.items()}
-        item["labels"] = labels
-        item["advantage"] = torch.tensor(ex.advantage, dtype=torch.float32)
+        item = super().__getitem__(idx)
+        item["advantage"] = torch.tensor(self.examples[idx].advantage, dtype=torch.float32)
         return item
