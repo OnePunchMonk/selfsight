@@ -15,22 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-# Qwen2-VL's vision tower requires each image's pixel grid to divide evenly
-# by patch_size * merge_size (28 for the 2B checkpoint); tiny images (e.g.
-# the 64x64 demo_mc fixture squares) don't satisfy that and crash deep
-# inside attention with a split_with_sizes mismatch. Upscaling to a safe
-# multiple of 28 before tokenizing sidesteps it.
-_MIN_IMAGE_SIDE = 336
-
-
-def _ensure_min_size(image):
-    width, height = image.size
-    if width >= _MIN_IMAGE_SIDE and height >= _MIN_IMAGE_SIDE:
-        return image
-    scale = max(_MIN_IMAGE_SIDE / width, _MIN_IMAGE_SIDE / height)
-    return image.resize((round(width * scale), round(height * scale)))
-
-
 @dataclass
 class SFTExample:
     prompt: str
@@ -116,7 +100,7 @@ class SFTDataset:
 
     def __getitem__(self, idx: int) -> dict:
         ex = self.examples[idx]
-        images = [_ensure_min_size(img) for img in ex.images]
+        images = ex.images
         prompt_messages = [
             {
                 "role": "user",
@@ -138,18 +122,18 @@ class SFTDataset:
             max_length=self.max_length,
         )
 
-        input_ids = full["input_ids"][0]
+        input_ids = full["input_ids"]
         labels = input_ids.clone()
-        prompt_len = min(prompt_ids["input_ids"].shape[-1], labels.shape[0])
-        labels[:prompt_len] = -100
+        prompt_len = min(prompt_ids["input_ids"].shape[-1], labels.shape[-1])
+        labels[..., :prompt_len] = -100
 
-        item = {k: v[0] for k, v in full.items()}
+        item = dict(full)
         item["labels"] = labels
         return item
 
 
 def collate_single(batch: list[dict]) -> dict:
-    """Adds the batch dimension back for batch_size=1 training.
+    """Preserves the processor output for batch_size=1 training.
 
     Batching >1 sample needs a model-specific collator -- VLM processors emit
     a variable pixel_values shape per sample (patch count depends on each
@@ -160,4 +144,4 @@ def collate_single(batch: list[dict]) -> dict:
     """
     if len(batch) != 1:
         raise ValueError("collate_single only supports per_device_train_batch_size=1")
-    return {k: v.unsqueeze(0) for k, v in batch[0].items()}
+    return batch[0]

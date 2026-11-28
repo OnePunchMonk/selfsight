@@ -20,7 +20,9 @@ tests using stubs instead.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+import hashlib
+from uuid import uuid4
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -92,6 +94,8 @@ class IterationRecord:
     promoted: bool
     candidate_model: str
     reason: str
+    override_collapse: bool = False
+    run_id: str = ""
 
 
 @dataclass
@@ -99,6 +103,7 @@ class LoopState:
     current_model: str
     iteration: int = 0
     history: list[IterationRecord] = field(default_factory=list)
+    lineage_id: str = field(default_factory=lambda: uuid4().hex)
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -107,7 +112,7 @@ class LoopState:
     @classmethod
     def from_dict(cls, data: dict) -> LoopState:
         history = [IterationRecord(**r) for r in data.get("history", [])]
-        return cls(current_model=data["current_model"], iteration=data.get("iteration", 0), history=history)
+        return cls(current_model=data["current_model"], iteration=data.get("iteration", 0), history=history, lineage_id=data.get("lineage_id") or uuid4().hex)
 
 
 def load_state(path: str | Path, default_model: str) -> LoopState:
@@ -136,10 +141,13 @@ EvaluateAndGateFn = Callable[["LoopConfig", str, str], bool]
 def run_iteration(
     config: LoopConfig,
     state: LoopState,
-    generate_and_train_fn: GenerateAndTrainFn,
-    evaluate_and_gate_fn: EvaluateAndGateFn,
+    generate_and_train_fn: GenerateAndTrainFn | None = None,
+    evaluate_and_gate_fn: EvaluateAndGateFn | None = None,
     override_cap: bool = False,
     override_collapse: bool = False,
+    *,
+    generate_fn=None,
+    train_fn=None,
 ) -> LoopState:
     """Advances the loop by exactly one iteration and returns the updated
     (and already-persisted) state.
@@ -155,31 +163,46 @@ def run_iteration(
             "metrics before continuing (pass override_cap=True to proceed)"
         )
 
+    # Persist the lineage even if generation or training fails on the first attempt.
+    save_state(state, config.state_path)
     baseline_model = state.current_model
     prior_runs = load_run_history(config.metrics_path, model=baseline_model, benchmark=config.train_benchmark)
 
-    # Keep existing three-argument callbacks compatible. The built-in path
-    # can enforce the check before training as well as before promotion.
-    if generate_and_train_fn is default_generate_and_train:
-        result = generate_and_train_fn(config, state, state.iteration, override_collapse=override_collapse)
+    run_id = f"{state.lineage_id}:{state.iteration}"
+    artifact = None
+    if generate_and_train_fn is None or generate_and_train_fn is default_generate_and_train:
+        identity = {k: v for k, v in asdict(config).items()
+                    if k not in {"current_model", "state_path", "work_dir", "metrics_path", "iteration_cap"}}
+        recipe = Path(config.training_config_path)
+        identity["recipe"] = recipe.read_text() if recipe.exists() else ""
+        key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        all_runs = load_run_history(config.metrics_path, model=None, benchmark=config.train_benchmark)
+        prior_runs = [m for m in all_runs if m.lineage_id == state.lineage_id
+                      and m.config_id == key and m.run_id != run_id]
+        # Read legacy history for the original checkpoint only when migrating.
+        if not prior_runs:
+            prior_runs = [m for m in all_runs if not m.lineage_id and m.model == baseline_model]
+        artifact = (generate_fn or default_generate)(config, state, state.iteration)
+        current_run = replace(artifact.metrics, run_id=run_id, lineage_id=state.lineage_id,
+                              config_id=key, override_collapse=override_collapse)
+        n_examples = artifact.n_examples
+        mean_agreement, mean_entropy = current_run.mean_agreement, current_run.mean_entropy
     else:
-        result = generate_and_train_fn(config, state, state.iteration)
-    n_examples, mean_agreement, mean_entropy, candidate_model = result
-
-    current_run = RunMetrics(
-        timestamp=datetime.now(timezone.utc).isoformat(),
-        model=state.current_model,
-        benchmark=config.train_benchmark,
-        n_groups=0,  # filled in by the caller's own metrics recording; not needed for the check
-        mean_agreement=mean_agreement,
-        mean_entropy=mean_entropy,
-    )
-    collapse: CollapseWarning | None = detect_collapse(current_run, prior_runs)
+        # Legacy callbacks perform training themselves and cannot enforce a pre-training check.
+        n_examples, mean_agreement, mean_entropy, candidate_model = generate_and_train_fn(
+            config, state, state.iteration)
+        current_run = RunMetrics(datetime.now(timezone.utc).isoformat(), baseline_model,
+                                 config.train_benchmark, 0, mean_agreement, mean_entropy)
+    collapse = detect_collapse(current_run, prior_runs)
+    if artifact is not None:
+        from data.diversity import append_run_metrics
+        current_run.status = "blocked" if collapse and not override_collapse else "accepted"
+        append_run_metrics(current_run, config.metrics_path)
     if collapse and not override_collapse:
-        raise CollapseDetectedError(
-            f"{collapse.summary()} (pass override_collapse=True to train on this rollout "
-            "set anyway, after reviewing it)"
-        )
+        raise CollapseDetectedError(f"{collapse.summary()} (pass override_collapse=True after review)")
+    if artifact is not None:
+        candidate_model = (train_fn or default_train)(config, state, state.iteration, artifact)
+    evaluate_and_gate_fn = evaluate_and_gate_fn or default_evaluate_and_gate
 
     promoted = evaluate_and_gate_fn(config, baseline_model, candidate_model)
 
@@ -194,6 +217,8 @@ def run_iteration(
         promoted=promoted,
         candidate_model=candidate_model,
         reason="no flagged regression" if promoted else "flagged regression on eval_benchmark",
+        override_collapse=override_collapse,
+        run_id=run_id,
     )
     state.history.append(record)
     state.iteration += 1
@@ -204,14 +229,16 @@ def run_iteration(
     return state
 
 
-def default_generate_and_train(
-    config: LoopConfig, state: LoopState, iteration: int, *, override_collapse: bool = False
-) -> tuple[int, float, float, str]:
-    """The real (GPU-requiring) implementation of one iteration's rollout
-    generation + self-consistency scoring/filtering + training. Not covered
-    by fast unit tests -- see training/sft.py / training/grpo.py, which are
-    exercised on real Modal GPU runs instead.
-    """
+@dataclass
+class RolloutArtifact:
+    n_examples: int
+    metrics: RunMetrics
+    curated_path: str
+    scored_path: str
+
+
+def default_generate(config: LoopConfig, state: LoopState, iteration: int) -> RolloutArtifact:
+    """Generate and score rollouts without starting an optimizer."""
     from data.filtering import filter_rollouts, write_jsonl
     from data.rollouts import RolloutGenerator
     from data.scoring import SelfConsistencyScorer, write_scored_groups_jsonl
@@ -236,14 +263,12 @@ def default_generate_and_train(
     write_jsonl(curated, curated_path)
 
     run_metrics = summarize(scored, model=state.current_model, benchmark=config.train_benchmark)
-    from data.diversity import append_run_metrics
+    return RolloutArtifact(len(curated), run_metrics, str(curated_path), str(scored_path))
 
-    prior_runs = load_run_history(config.metrics_path, model=state.current_model, benchmark=config.train_benchmark)
-    collapse = detect_collapse(run_metrics, prior_runs)
-    if collapse and not override_collapse:
-        raise CollapseDetectedError(collapse.summary())
-    append_run_metrics(run_metrics, config.metrics_path)
 
+def default_train(config: LoopConfig, state: LoopState, iteration: int, artifact: RolloutArtifact) -> str:
+    work_dir = Path(config.work_dir)
+    curated_path, scored_path = artifact.curated_path, artifact.scored_path
     output_dir = str(work_dir / f"candidate-{iteration}")
     if config.training_mode == "grpo":
         from training.config import GRPOConfig
@@ -265,7 +290,18 @@ def default_generate_and_train(
         cfg.output_dir = output_dir
         run_sft(cfg)
 
-    return len(curated), run_metrics.mean_agreement, run_metrics.mean_entropy, output_dir
+    return output_dir
+
+
+def default_generate_and_train(config, state, iteration, *, override_collapse=False):
+    """Compatibility entry point; run_iteration dispatches to separate stages."""
+    artifact = default_generate(config, state, iteration)
+    prior = load_run_history(config.metrics_path, state.current_model, config.train_benchmark)
+    collapse = detect_collapse(artifact.metrics, prior)
+    if collapse and not override_collapse:
+        raise CollapseDetectedError(collapse.summary())
+    candidate = default_train(config, state, iteration, artifact)
+    return artifact.n_examples, artifact.metrics.mean_agreement, artifact.metrics.mean_entropy, candidate
 
 
 def default_evaluate_and_gate(config: LoopConfig, baseline_model: str, candidate_model: str) -> bool:

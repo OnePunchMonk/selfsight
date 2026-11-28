@@ -1,7 +1,7 @@
 [project]
 name = "selfsight"
 version = "0.0.1"
-description = "Self-improving post-training and evaluation for vision-language models"
+description = "Self-generated training data and regression evaluation for vision-language models"
 requires-python = ">=3.10"
 dependencies = [
     "vlm-evaluation-harness @ git+https://github.com/OnePunchMonk/vlm-evaluation-harness",

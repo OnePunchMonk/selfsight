@@ -1,7 +1,8 @@
 # SelfSight
 
-Post-train vision-language models on their own responses, then check candidates
-against a separate, held-out benchmark before promoting them.
+SelfSight generates candidate training data from a vision-language model’s
+responses, filters it using answer agreement, and evaluates trained checkpoints
+for regressions before promotion.
 
 SelfSight samples several answers per prompt, uses answer agreement to select
 training data, and trains with LoRA SFT or an offline, group-relative reward
@@ -17,6 +18,9 @@ provides model adapters, benchmarks, and the independent regression gate.
 3. **Train:** use majority responses for SFT, or all informative groups for GRPO.
 4. **Evaluate:** compare the candidate with the active checkpoint on a different benchmark.
 5. **Promote or keep:** replace the active checkpoint only when the gate finds no flagged regression.
+
+The promotion benchmark is a validation set because it influences checkpoint
+selection. Use a separate, untouched test set to measure final capability gains.
 
 Agreement is a training signal, not proof of correctness. Passing the gate means
 no regression was detected; it does **not** establish a capability gain.
@@ -86,8 +90,9 @@ state. Invoke it again to continue from that state.
 | `regression_threshold` | Passed to the harness's paired-significance regression comparison. |
 
 The default training path checks collapse before training. History comparisons
-currently use the same model identifier and benchmark, so a newly promoted
-checkpoint starts a new comparison series. This heuristic can flag legitimate
+follow the loop lineage and generation/training configuration across promoted
+checkpoints. Retries replace the same iteration’s observation rather than
+adding it as its own baseline. This heuristic can flag legitimate
 convergence and can miss other failure modes; inspect the responses and held-out
 results. `--override-cap` and `--override-collapse` explicitly bypass their checks.
 

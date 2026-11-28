@@ -226,3 +226,45 @@ def test_default_path_checks_collapse_before_training(tmp_path, monkeypatch):
                   override_collapse=True)
     assert len(trained) == 1
     assert state.iteration == 1
+
+
+def test_staged_collapse_survives_promotion_retry_and_override(tmp_path):
+    import pytest
+    from training.loop import RolloutArtifact
+    from data.diversity import RunMetrics, load_run_history
+
+    for mode in ('sft', 'grpo'):
+        root = tmp_path / mode
+        config = _config(root, training_mode=mode)
+        state = LoopState(current_model=config.current_model)
+        trained = []
+        values = iter([(0.6, 0.8), (0.9, 0.2), (0.9, 0.2), (0.9, 0.2)])
+
+        def generate(cfg, st, iteration):
+            agreement, entropy = next(values)
+            return RolloutArtifact(10, RunMetrics('now', st.current_model,
+                cfg.train_benchmark, 5, agreement, entropy), 'curated', 'scored')
+
+        def train(cfg, st, iteration, artifact):
+            trained.append(iteration)
+            return f'candidate-{iteration}'
+
+        kwargs = dict(generate_fn=generate, train_fn=train,
+                      evaluate_and_gate_fn=lambda *args: True)
+        run_iteration(config, state, **kwargs)
+        assert state.current_model == 'candidate-0'
+        state = load_state(config.state_path, config.current_model)
+        for _ in range(2):
+            with pytest.raises(CollapseDetectedError):
+                run_iteration(config, state, **kwargs)
+        assert trained == [0]
+        rows = load_run_history(config.metrics_path, None, config.train_benchmark)
+        assert len(rows) == 2
+        assert rows[-1].status == 'blocked'
+        run_iteration(config, state, override_collapse=True, **kwargs)
+        assert trained == [0, 1]
+        rows = load_run_history(config.metrics_path, None, config.train_benchmark)
+        assert len(rows) == 2
+        assert rows[-1].override_collapse
+        assert state.history[-1].override_collapse
+        assert state.history[-1].run_id == rows[-1].run_id

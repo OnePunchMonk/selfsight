@@ -34,6 +34,11 @@ class RunMetrics:
     n_groups: int
     mean_agreement: float
     mean_entropy: float
+    run_id: str = ""
+    lineage_id: str = ""
+    config_id: str = ""
+    status: str = ""
+    override_collapse: bool = False
 
 
 def summarize(groups: list[ScoredGroup], model: str, benchmark: str) -> RunMetrics:
@@ -53,18 +58,23 @@ def summarize(groups: list[ScoredGroup], model: str, benchmark: str) -> RunMetri
 
 
 def append_run_metrics(metrics: RunMetrics, path: str | Path) -> None:
-    """Appends one run's metrics to a JSON-lines history file -- same
-    append-only, diffable convention as vlm-evaluation-harness's own
-    HistoryStore, kept separate since this tracks the in-loop scorer's
-    signal, not the eval harness's.
+    """Record metrics, replacing an existing run ID on retry.
+
+    Legacy observations without IDs are appended. Loop history is scoped by
+    lineage and config identity; concurrent writers are not supported.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a") as f:
-        f.write(json.dumps(asdict(metrics)) + "\n")
+    rows = [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
+    if metrics.run_id:
+        rows = [row for row in rows if row.get("run_id") != metrics.run_id]
+    rows.append(asdict(metrics))
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    temporary.replace(path)
 
 
-def load_run_history(path: str | Path, model: str, benchmark: str) -> list[RunMetrics]:
+def load_run_history(path: str | Path, model: str | None, benchmark: str) -> list[RunMetrics]:
     """Loads prior runs for the same (model, benchmark) pair, oldest first."""
     path = Path(path)
     if not path.exists():
@@ -76,7 +86,7 @@ def load_run_history(path: str | Path, model: str, benchmark: str) -> list[RunMe
             if not line:
                 continue
             row: dict[str, Any] = json.loads(line)
-            if row.get("model") == model and row.get("benchmark") == benchmark:
+            if (model is None or row.get("model") == model) and row.get("benchmark") == benchmark:
                 history.append(RunMetrics(**row))
     return history
 

@@ -122,5 +122,5 @@ class GRPODataset(SFTDataset):
         import torch
 
         item = super().__getitem__(idx)
-        item["advantage"] = torch.tensor(self.examples[idx].advantage, dtype=torch.float32)
+        item["advantage"] = torch.tensor([self.examples[idx].advantage], dtype=torch.float32)
         return item

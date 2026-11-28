@@ -81,8 +81,8 @@ def test_grpo_dataset_carries_advantage_and_masks_prompt():
     item = ds[0]
 
     prompt_len = len("PROMPT:hello|")
-    assert torch.all(item["labels"][:prompt_len] == -100)
-    assert torch.all(item["labels"][prompt_len:] != -100)
+    assert torch.all(item["labels"][0, :prompt_len] == -100)
+    assert torch.all(item["labels"][0, prompt_len:] != -100)
     assert item["advantage"].item() == 1.5
 
 

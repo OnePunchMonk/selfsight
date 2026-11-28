@@ -73,13 +73,13 @@ def test_sft_dataset_masks_prompt_tokens():
     item = ds[0]
 
     prompt_len = len("PROMPT:hello|")
-    assert torch.all(item["labels"][:prompt_len] == -100)
-    assert torch.all(item["labels"][prompt_len:] != -100)
-    assert torch.equal(item["labels"][prompt_len:], item["input_ids"][prompt_len:])
+    assert torch.all(item["labels"][0, :prompt_len] == -100)
+    assert torch.all(item["labels"][0, prompt_len:] != -100)
+    assert torch.equal(item["labels"][0, prompt_len:], item["input_ids"][0, prompt_len:])
 
 
-def test_collate_single_adds_batch_dim():
-    item = {"input_ids": torch.tensor([1, 2, 3]), "labels": torch.tensor([-100, 2, 3])}
+def test_collate_single_preserves_batch_dim():
+    item = {"input_ids": torch.tensor([[1, 2, 3]]), "labels": torch.tensor([[-100, 2, 3]])}
     batch = collate_single([item])
     assert batch["input_ids"].shape == (1, 3)
 
@@ -91,3 +91,21 @@ def test_collate_single_rejects_batches_larger_than_one():
         assert False, "expected ValueError"
     except ValueError:
         pass
+
+
+def test_processor_vision_tensors_survive_dataset_and_collator():
+    class VisionProcessor(_FakeProcessor):
+        def __call__(self, *args, **kwargs):
+            result = super().__call__(*args, **kwargs)
+            # Qwen packs patches, whereas LLaVA carries images and tiles.
+            result.update(pixel_values=torch.randn(576, 1176),
+                          image_grid_thw=torch.tensor([[1, 24, 24]]),
+                          image_sizes=torch.tensor([[336, 336]]),
+                          tiled_pixels=torch.randn(1, 5, 3, 336, 336))
+            self.last = result
+            return result
+    processor = VisionProcessor()
+    batch = collate_single([SFTDataset([SFTExample('p', 'r', [])], processor)[0]])
+    for key, tensor in processor.last.items():
+        assert batch[key] is tensor
+    assert batch['labels'].shape == batch['input_ids'].shape
